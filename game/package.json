@@ -1,0 +1,26 @@
+{
+  "name": "before-us",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5183",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5183",
+    "test": "vitest run",
+    "server": "node server/index.js",
+    "mongo:up": "docker start beforeus-mongo 2>/dev/null || docker run -d --name beforeus-mongo --restart unless-stopped -p 127.0.0.1:27019:27017 -v beforeus-mongo-data:/data/db mongo:7",
+    "mongo:down": "docker stop beforeus-mongo"
+  },
+  "dependencies": {
+    "mongodb": "^7.8.0",
+    "peerjs": "^1.5.5",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.187.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
