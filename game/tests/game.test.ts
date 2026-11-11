@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll } from 'vitest';
-import { generateWorld, LAKE, World, floorH } from '../src/worldgen';
+import { generateWorld, LAKE, World, floorH, pushOut, walkStep, segDist, sceneryNear, SPAWN_CLEAR } from '../src/worldgen';
 import { findPlaces, near, miniProject, zoomAt, clampView, viewToWorld, worldToView, fallsTop } from '../src/places';
 import { Sim, State, AXE_USES, TREE_HP, SHELTER_LOGS, SHELTER_THATCH, DAY_SECONDS } from '../src/sim';
 
@@ -327,5 +327,79 @@ describe('map: places, waypoint and minimap maths', () => {
     for (let i = 0; i < 20; i++) v = zoomAt(v, 10, 10, 0.8, 520);
     expect(v).toEqual({ zoom: 1, ox: 0, oy: 0 });
     expect(clampView({ zoom: 2, ox: -50, oy: 9999 }, 520)).toEqual({ zoom: 2, ox: 0, oy: 260 });
+  });
+});
+
+describe('undergrowth and dead wood: placement and collision', () => {
+  const ends = (o: World['scenery'][number]) => { const ex = Math.sin(o.yaw) * o.hl, ez = Math.cos(o.yaw) * o.hl; return [o.x - ex, o.z - ez, o.x + ex, o.z + ez] as const; };
+  const gap = (o: World['scenery'][number], x: number, z: number) => segDist(x, z, ...ends(o)).d;
+  const openLog = () => world.scenery.find((o) => o.kind === 1 && sceneryNear(world, o.x, o.z).every((id) => id === o.id || world.scenery[id].r === 0 || Math.hypot(world.scenery[id].x - o.x, world.scenery[id].z - o.z) > 9))!;
+
+  it('is the same for the same seed, and has all three kinds', () => {
+    const w2 = generateWorld(1234, 8000);
+    expect(w2.scenery).toEqual(world.scenery);
+    for (const k of [0, 1, 2]) expect(world.scenery.filter((o) => o.kind === k).length).toBeGreaterThan(20);
+    expect(world.scenery.some((o) => o.kind === 0 && o.r === 0)).toBe(true);  // small bushes can be walked through
+    expect(world.scenery.some((o) => o.kind === 0 && o.r > 0)).toBe(true);    // big ones cannot
+    expect(world.scenery.every((o) => o.kind === 0 || o.r > 0)).toBe(true);   // logs and stumps always block
+  });
+  it('none is in water, inside a tree trunk or in the clearing at the start', () => {
+    for (const o of world.scenery) {
+      const [ax, az, bx, bz] = ends(o);
+      for (const k of [0, 0.25, 0.5, 0.75, 1]) expect(world.depth(ax + (bx - ax) * k, az + (bz - az) * k)).toBe(0);
+      expect(gap(o, world.spawn.x, world.spawn.z)).toBeGreaterThanOrEqual(SPAWN_CLEAR);
+      for (const t of world.trees) {
+        if (Math.abs(t.x - o.x) > 6 || Math.abs(t.z - o.z) > 6) continue;
+        expect(gap(o, t.x, t.z)).toBeGreaterThan(0.32 * t.s + Math.max(o.r - 0.3, 0.2));
+      }
+    }
+  });
+  it('a walker heading straight at a log is stopped at its side, and one coming at a slant slides along and past it', () => {
+    const o = openLog(), px = Math.cos(o.yaw), pz = -Math.sin(o.yaw), ax = Math.sin(o.yaw), az = Math.cos(o.yaw);
+    let x = o.x + px * 4, z = o.z + pz * 4;
+    for (let i = 0; i < 200; i++) { const q = pushOut(world, x - px * 0.07, z - pz * 0.07, null, false); x = q.x; z = q.z; expect(gap(o, x, z)).toBeGreaterThanOrEqual(o.r - 1e-6); }
+    expect((x - o.x) * px + (z - o.z) * pz).toBeGreaterThan(0);           // still on the side it came from
+    expect(gap(o, x, z)).toBeCloseTo(o.r, 3);
+    x = o.x + px * 3 - ax * (o.hl - 0.5); z = o.z + pz * 3 - az * (o.hl - 0.5);
+    const hx = (-px + ax) * Math.SQRT1_2, hz = (-pz + az) * Math.SQRT1_2;
+    for (let i = 0; i < 300; i++) { const q = pushOut(world, x + hx * 0.07, z + hz * 0.07, null, false); x = q.x; z = q.z; expect(gap(o, x, z)).toBeGreaterThanOrEqual(o.r - 1e-6); }
+    expect((x - o.x) * ax + (z - o.z) * az).toBeGreaterThan(o.hl + 2);     // went on past the far end
+  });
+  it('a big bush blocks, a small one does not, and a standing tree still does', () => {
+    const big = world.scenery.find((o) => o.kind === 0 && o.r > 0)!, small = world.scenery.find((o) => o.kind === 0 && o.r === 0 && sceneryNear(world, o.x, o.z).every((id) => world.scenery[id].r === 0))!;
+    const q = pushOut(world, big.x + 0.1, big.z, null, false);
+    expect(Math.hypot(q.x - big.x, q.z - big.z)).toBeGreaterThanOrEqual(big.r - 1e-6);
+    expect(pushOut(world, small.x + 0.1, small.z, null, false)).toMatchObject({ x: small.x + 0.1, z: small.z, hit: null });
+    const t = world.trees[100], inTree = pushOut(world, t.x + 0.05, t.z, []);
+    expect(Math.hypot(inTree.x - t.x, inTree.z - t.z)).toBeGreaterThan(0.3 * t.s);
+    expect(pushOut(world, t.x + 0.05, t.z, [100], false).hit === t).toBe(false); // felled: no longer in the way
+  });
+  it('a self-steering walker gets round a log it meets head-on', () => {
+    const o = openLog(), px = Math.cos(o.yaw), pz = -Math.sin(o.yaw);
+    let x = o.x + px * 4, z = o.z + pz * 4;
+    const tx = o.x - px * 5, tz = o.z - pz * 5;
+    for (let i = 0; i < 600 && Math.hypot(tx - x, tz - z) > 0.5; i++) {
+      const l = Math.hypot(tx - x, tz - z), q = walkStep(world, x, z, (tx - x) / l, (tz - z) / l, 0.1);
+      x = q.x; z = q.z; expect(gap(o, x, z)).toBeGreaterThanOrEqual(o.r - 1e-6);
+    }
+    expect(Math.hypot(tx - x, tz - z)).toBeLessThanOrEqual(0.5);
+  });
+  it('the companion and a deer cross to the far side of a log without passing through it', () => {
+    const { sim, p } = fresh(), o = openLog(), px = Math.cos(o.yaw), pz = -Math.sin(o.yaw);
+    sim.state.time = 0.45; sim.state.items = [];
+    p.x = o.x + px * 6; p.z = o.z + pz * 6;
+    const n = sim.join('npc:asha', 'Asha', 0); Object.assign(n, { npc: true, goal: 'follow', nt: 99, x: o.x - px * 7, z: o.z - pz * 7 });
+    const deer = { id: 9001, k: 'deer' as const, x: o.x - px * 5 + 60, z: o.z - pz * 5, ry: 0, st: 'walk' as const, hp: 3, t: 99, tx: 0, tz: 0, spd: 0 };
+    const o2 = world.scenery.find((q) => q.kind === 1 && q.id !== o.id && Math.hypot(q.x - p.x, q.z - p.z) > 80 && world.slopeY(q.x, q.z) > 0.9)!, qx = Math.cos(o2.yaw), qz = -Math.sin(o2.yaw);
+    Object.assign(deer, { x: o2.x - qx * 5, z: o2.z - qz * 5, tx: o2.x + qx * 6, tz: o2.z + qz * 6 });
+    sim.state.animals = [deer];
+    let crossed = false;
+    for (let i = 0; i < 400; i++) {
+      sim.step(0.05);
+      expect(gap(o, n.x, n.z)).toBeGreaterThanOrEqual(o.r - 1e-6);
+      if (deer.st === 'walk') { expect(gap(o2, deer.x, deer.z)).toBeGreaterThanOrEqual(o2.r - 1e-6); if ((deer.x - o2.x) * qx + (deer.z - o2.z) * qz > 1.5) crossed = true; }
+    }
+    expect(Math.hypot(n.x - p.x, n.z - p.z)).toBeLessThan(4);
+    expect(crossed).toBe(true);
   });
 });

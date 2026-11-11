@@ -39,7 +39,7 @@
   .menu-open #help, .menu-open #stats, .menu-open #prompt, .menu-open #story, .menu-open #top { display: none !important; }
   /* Map open: nothing may sit under or over it. The prompt always would; the story panel does on short screens. A message stays readable on top. */
   .map-open #prompt { display: none !important; }
-  @media (max-height: 760px) { .map-open #story { display: none !important; } }
+  @media (max-height: 760px) { .map-open #story { display: none !important; } .map-open #toast { top: 8px; } }
   #toast { z-index: 4; }
   #link { right: 14px; top: 12px; max-width: 360px; font-size: 12.5px; word-break: break-all; cursor: pointer; }
   #menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 30%, #2b3a3a, #0b0d10 70%); z-index: 5; }
